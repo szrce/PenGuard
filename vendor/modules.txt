@@ -1,0 +1,2 @@
+# github.com/gobwas/httphead v0.1.0
+## explicit; go 1.15
