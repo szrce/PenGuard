@@ -9,13 +9,31 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 )
+
+var blacklistdir = "/usr/local/etc/penguard/blacklist/"
+var	bdir =  "/usr/local/sbin"
+var blacklist = make(map[string]struct{})
+var DEBUG = false
+
+var bufferPool = sync.Pool{
+    New: func() interface{} {
+        return make([]byte, 32*2048)
+    },
+}
+
+func copyData(dst io.Writer, src io.Reader) {
+    buffer := bufferPool.Get().([]byte)
+    defer bufferPool.Put(buffer)
+    io.CopyBuffer(dst, src, buffer)
+}
 
 func main() {
 
 	ls, err := net.Listen("tcp4", ":9020")
 	fmt.Println("listen:9020")
-
+	loadBlacklist()
 	if err != nil {
 		panic(err)
 	}
@@ -29,24 +47,27 @@ func main() {
 	}
 
 }
+
+func loadBlacklist() {
+    file, err := os.Open(blacklistdir + "sitelist")
+    if err != nil {
+        panic(err)
+    }
+    defer file.Close()
+
+    scanner := bufio.NewScanner(file)
+	scanner.Split(bufio.ScanLines)
+    for scanner.Scan() {
+        blacklist[scanner.Text()] = struct{}{}
+    }
+}
+
 func checkdomain(domain string) bool {
-	readFile, err := os.Open("sitelist")
-
-	if err != nil {
-		fmt.Println(err)
+	if DEBUG {
+		fmt.Println("check ->:" +  domain)
 	}
-
-	fileScanner := bufio.NewScanner(readFile)
-
-	fileScanner.Split(bufio.ScanLines)
-
-	for fileScanner.Scan() {
-		if fileScanner.Text() == domain {
-			return true
-		}
-	}
-	readFile.Close()
-	return false
+    _, exists := blacklist[domain]
+    return exists
 }
 
 func isHTTPs(val string) bool {
@@ -64,9 +85,10 @@ func isBlocked(val string) bool{
 }
 
 
-
 func handler(conn net.Conn) {
-	fmt.Printf("======>connection coming this  %s \n\n", conn.RemoteAddr().String())
+	if DEBUG {
+		fmt.Printf("======>connection coming this  %s \n\n", conn.RemoteAddr().String())
+	}
 	for {
 
 		buf := make([]byte, 1024)
@@ -74,7 +96,9 @@ func handler(conn net.Conn) {
 
 
 		if err != nil {
-			fmt.Printf("\nconnection broken %s \n", err)
+			if DEBUG {
+				fmt.Printf("\nconnection broken %s \n", err)
+			}
 			conn.Close()
 			break
 		}
@@ -99,12 +123,14 @@ func handler(conn net.Conn) {
 				// handle error
 			}
 			conn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n"))
-			go io.Copy(CheckConn, conn)
-			io.Copy(conn, CheckConn)
+			go copyData(conn, CheckConn)
+			copyData(CheckConn, conn)
+			
 
 		}else{
-
-			fmt.Println(requrl)
+			if DEBUG {
+				fmt.Println(requrl)
+			}
 			if isBlocked(requrl.Host) {
 				conn.Write([]byte("<html><body><div style=\"background-color:red;\">blocked</div></body></html>"))
 				conn.Close()
@@ -123,24 +149,3 @@ func handler(conn net.Conn) {
 	}
 
 }
-
-/*
-	//fmt.Printf("%s", buf)
-
-	//conn.Close()
-
-	//conn.Write([]byte("<html><body><div style=\"background-color:red;\">test</div></body></html>"))
-
-
-		resp, err := http.Get("http://example.com/")
-		if err != nil {
-		}
-		defer resp.Body.Close()
-		body, err := io.ReadAll(resp.Body)
-
-		//fmt.Print(body)
-		//conn.Write([]byte("<html><body><div style=\"background-color:red;\">test</div></body></html>"))
-		conn.Write(body)
-		//conn.Close()
-		//_, err = conn.Write(buf)
-*/
